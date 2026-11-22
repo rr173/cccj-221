@@ -1,0 +1,17 @@
+{
+  "op": "and",
+  "args": [
+    {"op": "cmp", "domain": "parent", "attr": "region", "op_kind": "eq", "value": "N"},
+    {
+      "op": "count_where",
+      "k": 2,
+      "arg": {
+        "op": "and",
+        "args": [
+          {"op": "cmp", "domain": "child", "attr": "temp", "op_kind": "lt", "value": 25},
+          {"op": "cmp", "domain": "child", "attr": "source", "op_kind": "eq", "value": "X"}
+        ]
+      }
+    }
+  ]
+}

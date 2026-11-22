@@ -1,0 +1,2 @@
+# bitgroup 仅使用 Python 标准库，无需任何第三方依赖。
+# 要求 Python >= 3.11（使用 os.pread/pwrite、mmap、int.bit_count 等）。

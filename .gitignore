@@ -1,0 +1,17 @@
+# 规模资料与索引产物一律不入库
+scale_run/
+scale_*/
+xc/
+xc_*/
+idx/
+idx_*/
+**/index/
+**/data/
+**/work/
+**/work_sort/
+**/tmp/
+*.pyc
+__pycache__/
+.pytest_cache/
+bench_report.json
+run.log

@@ -1,0 +1,4 @@
+{"child_id": "p1", "entity_id": "P", "temp": 20, "source": "Y", "ok": true}
+{"child_id": "p2", "entity_id": "P", "temp": null, "source": "X", "ok": false}
+{"child_id": "q1", "entity_id": "Q", "temp": 20, "source": "X", "ok": true}
+{"child_id": "q2", "entity_id": "Q", "temp": 21, "source": "X", "ok": null}
