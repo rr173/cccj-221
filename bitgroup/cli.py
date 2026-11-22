@@ -19,6 +19,10 @@
         --date 2026-02-28 --index ./idx_0228 --ast query.json
     python -m bitgroup.cli ledger-episodes --ledger ./ledger.db --entity-id P
     python -m bitgroup.cli ledger-sources --ledger ./ledger.db
+
+    # 新旧规则历史对照：两份台账 + 闭合自然日窗口 → JSONL 变更带
+    python -m bitgroup.cli ledger-compare --left old.db --right new.db \\
+        --start 2026-03-01 --end 2026-03-31 --out band.jsonl
 """
 
 from __future__ import annotations
@@ -127,6 +131,20 @@ def main(argv=None) -> int:
     p_stats = sub.add_parser("ledger-stats", help="台账统计")
     p_stats.add_argument("--ledger", required=True)
 
+    p_cmp = sub.add_parser(
+        "ledger-compare",
+        help="两份台账的只读历史对照：输出按日期压缩的 JSONL 变更带",
+    )
+    p_cmp.add_argument("--left", required=True, help="左（老规则）台账 SQLite 路径")
+    p_cmp.add_argument("--right", required=True, help="右（新规则）台账 SQLite 路径")
+    p_cmp.add_argument("--start", required=True,
+                       help="窗口首日 YYYY-MM-DD（含）")
+    p_cmp.add_argument("--end", required=True, help="窗口末日 YYYY-MM-DD（含）")
+    p_cmp.add_argument("--out", default=None,
+                       help="JSONL 变更带输出路径（默认标准输出）")
+    p_cmp.add_argument("--scratch-dir", default=None,
+                       help="磁盘暂存目录（默认系统临时目录）")
+
     args = parser.parse_args(argv)
     try:
         if args.cmd == "build":
@@ -143,6 +161,9 @@ def main(argv=None) -> int:
                 "meta": handle.meta,
             }, ensure_ascii=False, indent=2))
             return 0
+
+        if args.cmd == "ledger-compare":
+            return _run_compare(args)
 
         if args.cmd.startswith("ledger-"):
             return _run_ledger(args)
@@ -180,6 +201,27 @@ def main(argv=None) -> int:
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)},
                          ensure_ascii=False), file=sys.stderr)
         return 2
+
+
+def _run_compare(args) -> int:
+    """只读对照：JSONL 变更带写 --out（默认 stdout），处理量指标写 stderr。"""
+    from .compare import compare_ledgers
+
+    with compare_ledgers(args.left, args.right, args.start, args.end,
+                         scratch_dir=args.scratch_dir) as run:
+        out_fh = (open(args.out, "w", encoding="utf-8") if args.out
+                  else sys.stdout)
+        try:
+            for row in run.rows():
+                out_fh.write(json.dumps(row, ensure_ascii=False,
+                                        separators=(",", ":")) + "\n")
+            metrics = run.metrics
+        finally:
+            if args.out:
+                out_fh.close()
+    print(json.dumps({"metrics": metrics}, ensure_ascii=False),
+          file=sys.stderr)
+    return 0
 
 
 def _run_ledger(args) -> int:

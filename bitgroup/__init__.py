@@ -16,11 +16,13 @@ from .errors import (
     IndexError as BgIndexError,
     QueryError,
     TokenError,
+    LedgerError,
 )
 from .types import ScalarType, validate_scalar, json_type_name
 from .engine import Engine, QueryResult
 from .importer import Importer, IndexHandle
 from .ledger import Ledger, RegisterResult, parse_business_date
+from .compare import CompareRun, compare_ledgers
 
 __all__ = [
     "BitgroupError",
@@ -40,4 +42,6 @@ __all__ = [
     "Ledger",
     "RegisterResult",
     "parse_business_date",
+    "CompareRun",
+    "compare_ledgers",
 ]

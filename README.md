@@ -36,12 +36,15 @@ bitgroup/
   engine.py     三态集合执行、提升、分页、分面、explain-entity
   reference.py  独立逐行参考解释器（不接触产品位图/提升逻辑，仅用于核对）
   ledger.py     历史状态台账（SQLite，按自然日维护连续同态区间）
+  compare.py    新旧规则历史对照（只读九格对照，输出按日期压缩的变更带）
   cli.py        命令行入口
 scripts/
   generate_scale.py  规模数据生成器（默认 1M 主 / 10M 子）
   bench_scale.py     128MiB 地址空间约束下的基准与观测
   ledger_demo.py     台账小夹具复跑 + 独立核对（区间表与来源登记）
   ledger_contrast.py 历史对照实验（证明更新不扫描旧历史）
+  compare_demo.py    新旧规则对照小样本复跑 + 逐日逐对象独立核对
+  compare_scale.py   对照规模证据（长稳定历史 + 零散不可比日）
 fixtures/            手算示例小夹具（ledger/ 为历史台账逐日夹具）
 tests/               unittest 套件（含与参考解释器的全量交叉核对）
 ```
@@ -137,6 +140,78 @@ SELECT * FROM episode WHERE entity_id = 'A' ORDER BY first_day;
 -- 每日来源登记
 SELECT business_date, index_token FROM daily_source ORDER BY business_date;
 ```
+
+## 新旧规则历史对照（只读）
+
+试跑期间，同一批日报索引被两套规则各自记进一份台账（左=老规则，右=新
+规则）。上线前的迁移评估要回答：**同一批对象在两套规则下分别落入哪一
+格，这些格子的成员是否稳定**（例如“老 false、新 true”的人数连续两天都
+是 50，是完全同一批人，还是已经换了一轮）。`ledger-compare` 输入左、右
+两份现成的 SQLite 台账和一个闭合自然日窗口，输出一份按日期压缩的
+JSONL 变更带：
+
+```bash
+python -m bitgroup.cli ledger-compare \
+  --left ./old_rule.db --right ./new_rule.db \
+  --start 2026-03-01 --end 2026-03-31 --out band.jsonl
+# JSONL 变更带写 --out（缺省为标准输出）；处理量指标写标准错误
+```
+
+### 每天先判定能不能比较
+
+只看两边 `daily_source` 在**当天**的登记：
+
+| 状态 | 含义 |
+| --- | --- |
+| `comparable` | 两边都登记了这一天，且 `index_token` 完全相等 |
+| `different_source` | 都登记了，但当天代号不同 |
+| `left_missing` / `right_missing` | 只有一边登记（指缺登记的一边） |
+| `both_missing` | 两边都没有登记 |
+
+只认当天的代号（同一代号出现在别的日期不算），不看人数、不看规则指纹；
+空批次的同源日也是可比的（九格全零）。一次命令对每份台账各固定一个
+**只读快照**（`mode=ro` + 显式读事务）：来源登记与状态区间永远来自同一
+份提交，台账可以边用边继续登记；命令不修改台账，也不需要打开任何日报
+索引或原始文件。
+
+### 变更带行格式
+
+每行一个 JSON 对象：`first_day` / `last_day`（`YYYY-MM-DD`，两端都含）、
+`status`、`cells`。整段窗口无重无漏、按时间递增；只有 `status` 与整组
+`cells` 都相同的相邻自然日才合并，且必须合并。
+
+- 不可比段：`"cells": null`。
+- 可比段：固定九格，顺序为左 `true,false,unknown` × 右
+  `true,false,unknown`，每格
+  `{"left": ..., "right": ..., "count": N, "entered": M}`，
+  左右格坐标显式可辨，零人数格也在。
+- `count`：当天在该格的人数（只计入两侧当日都有区间的对象，缺席不算
+  `unknown`；同一对象当天两边同时变状态，直接按新状态对归格）。
+- `entered`：这些人里**前一自然日未在同一格**的人数（包括前一天不在
+  对照对象内的人）。若前一日不在窗口内或不可比，则当天九格 `entered`
+  全为 `null`——不是零，也不回溯到较早的可比日。
+
+### 处理量与复跑
+
+主要工作量由窗口相关的状态区间记录与日来源记录决定：区间读取是对
+`episode_segment` 的一次主键序顺序筛选；每个对象的左/右区间流式归并成
+“状态对游程”，只把游程端点事件写磁盘暂存再排序聚合——不把台账还原成
+逐对象逐日记录，也不把长区间按可比日段复制相交；零散未对齐日只增加状态
+游程与输出行，不放大稳定对象的工作量。每次运行的 `metrics`（JSONL 之外
+写标准错误）给出区间行数、游程数、事件数、状态游程数、输出行数与
+SQLite VM 步数等可观察量。
+
+```bash
+# 小样本复跑 + 逐日逐对象独立枚举核对（含甲乙互换、不同代号日、
+# unknown、对象出入、窗口裁剪；同时验证 CLI 与压缩边界）
+PYTHONPATH=. python3 scripts/compare_demo.py --work-dir ./compare_run
+
+# 规模证据：长稳定历史夹杂大量零散不可比日，区分“直接处理区间”与
+# “按对象展开日期/可比段”的实现；churn 场景在 128 MiB 约束下对照
+PYTHONPATH=. python3 scripts/compare_scale.py --work-dir ./compare_scale_run
+```
+
+生成的数据不入库（两个目录均已被 .gitignore 覆盖，脚本默认结束后删除）。
 
 ## 规模化（128 MiB 约束，数据与索引不入库）
 

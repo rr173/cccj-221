@@ -5,6 +5,8 @@ xc/
 xc_*/
 ledger_run/
 contrast_run/
+compare_run/
+compare_scale_run/
 *.db
 *.db-wal
 *.db-shm
