@@ -1,4 +1,4 @@
-"""命令行入口：建索引、计数、分页查询、分面、解释。
+"""命令行入口：建索引、计数、分页查询、分面、解释、历史状态台账。
 
 示例
 ====
@@ -11,6 +11,14 @@
     python -m bitgroup.cli query --index ./idx --ast query.json --state true --page-size 50
     python -m bitgroup.cli facets --index ./idx --ast query.json --attr region
     python -m bitgroup.cli explain --index ./idx --ast query.json --entity-id P
+
+    # 历史状态台账：首次创建（同一条命令随后可用于补录/替换）
+    python -m bitgroup.cli ledger-register --ledger ./ledger.db \\
+        --date 2026-03-02 --index ./idx_0302 --ast query.json
+    python -m bitgroup.cli ledger-register --ledger ./ledger.db \\
+        --date 2026-02-28 --index ./idx_0228 --ast query.json
+    python -m bitgroup.cli ledger-episodes --ledger ./ledger.db --entity-id P
+    python -m bitgroup.cli ledger-sources --ledger ./ledger.db
 """
 
 from __future__ import annotations
@@ -23,6 +31,7 @@ from typing import Any, Dict
 from .engine import Engine
 from .errors import BitgroupError
 from .importer import Importer
+from .ledger import Ledger, read_index_schema
 
 
 def _load_schema(text: str) -> Dict[str, str]:
@@ -38,6 +47,10 @@ def _load_ast(path: str) -> Dict[str, Any]:
     if not isinstance(ast, dict):
         raise ValueError("AST 必须是 JSON 对象")
     return ast
+
+
+def _dump(obj: Any) -> None:
+    print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
 def main(argv=None) -> int:
@@ -73,6 +86,47 @@ def main(argv=None) -> int:
     p_explain.add_argument("--entity-id", required=True)
     p_explain.add_argument("--cache-budget-mib", type=int, default=32)
 
+    # ---- 历史状态台账 ----------------------------------------------------
+
+    p_reg = sub.add_parser(
+        "ledger-register",
+        help="登记某业务日期的日结（首次创建 / 补录 / 替换）",
+    )
+    p_reg.add_argument("--ledger", required=True, help="台账 SQLite 路径")
+    p_reg.add_argument("--date", required=True,
+                       help="业务日期 YYYY-MM-DD（只取自本参数）")
+    p_reg.add_argument("--index", required=True, help="当天的只读索引目录")
+    p_reg.add_argument("--ast", required=True, help="规则文件（固定查询 AST）")
+    p_reg.add_argument("--cache-budget-mib", type=int, default=32)
+
+    p_epi = sub.add_parser("ledger-episodes", help="读取状态区间")
+    p_epi.add_argument("--ledger", required=True)
+    p_epi.add_argument("--entity-id", default=None)
+    p_epi.add_argument("--state", default=None,
+                       choices=("true", "false", "unknown"))
+    p_epi.add_argument("--first-day", default=None)
+    p_epi.add_argument("--last-day", default=None)
+    p_epi.add_argument("--limit", type=int, default=None)
+    p_epi.add_argument("--offset", type=int, default=0)
+
+    p_src = sub.add_parser("ledger-sources", help="读取按日来源登记")
+    p_src.add_argument("--ledger", required=True)
+    p_src.add_argument("--date", default=None)
+    p_src.add_argument("--start", default=None)
+    p_src.add_argument("--end", default=None)
+    p_src.add_argument("--index-token", default=None)
+    p_src.add_argument("--limit", type=int, default=None)
+    p_src.add_argument("--offset", type=int, default=0)
+
+    p_ods = sub.add_parser("ledger-object-days", help="读取某对象的逐日状态")
+    p_ods.add_argument("--ledger", required=True)
+    p_ods.add_argument("--entity-id", required=True)
+    p_ods.add_argument("--start", default=None)
+    p_ods.add_argument("--end", default=None)
+
+    p_stats = sub.add_parser("ledger-stats", help="台账统计")
+    p_stats.add_argument("--ledger", required=True)
+
     args = parser.parse_args(argv)
     try:
         if args.cmd == "build":
@@ -89,6 +143,9 @@ def main(argv=None) -> int:
                 "meta": handle.meta,
             }, ensure_ascii=False, indent=2))
             return 0
+
+        if args.cmd.startswith("ledger-"):
+            return _run_ledger(args)
 
         with Engine(
             args.index,
@@ -123,6 +180,50 @@ def main(argv=None) -> int:
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)},
                          ensure_ascii=False), file=sys.stderr)
         return 2
+
+
+def _run_ledger(args) -> int:
+    with Ledger(args.ledger) as ledger:
+        if args.cmd == "ledger-register":
+            ast = _load_ast(args.ast)
+            parent_schema, child_schema = read_index_schema(args.index)
+            if not ledger.exists:
+                ledger.create(ast, parent_schema, child_schema)
+            # 固定 AST 与 schema 由台账自身核对；日期只取 --date 参数。
+            result = ledger.register(
+                args.date,
+                args.index,
+                ast=ast,
+                engine_factory=lambda path: Engine(
+                    path,
+                    cache_budget_bytes=args.cache_budget_mib * 1024 * 1024,
+                ),
+            )
+            _dump({"ok": True, **result.as_dict()})
+        elif args.cmd == "ledger-episodes":
+            _dump({"episodes": ledger.episodes(
+                args.entity_id,
+                first_day=args.first_day,
+                last_day=args.last_day,
+                state=args.state,
+                limit=args.limit,
+                offset=args.offset,
+            )})
+        elif args.cmd == "ledger-sources":
+            _dump({"daily_sources": ledger.daily_sources(
+                business_date=args.date,
+                start=args.start,
+                end=args.end,
+                index_token=args.index_token,
+                limit=args.limit,
+                offset=args.offset,
+            )})
+        elif args.cmd == "ledger-object-days":
+            _dump({"entity_id": args.entity_id, "days": ledger.object_days(
+                args.entity_id, start=args.start, end=args.end)})
+        else:
+            _dump(ledger.stats())
+    return 0
 
 
 if __name__ == "__main__":

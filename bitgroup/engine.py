@@ -16,7 +16,7 @@ import json
 import os
 import struct
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from . import astutil
 from .astutil import make_page_token, verify_page_token
@@ -195,6 +195,29 @@ class Engine:
             "fingerprint": fp,
             "io": self.monitor.delta(before),
         }
+
+    def iter_states(self, ast: Dict[str, Any]) -> Iterator[Tuple[str, str]]:
+        """按索引内局部编号升序，流式产出 ``(entity_id, state)``。
+
+        覆盖当前索引完整主对象域：``true`` / ``false`` / ``unknown`` 三态
+        各恰好出现一次。身份翻译与位图读取都是顺序流，不把全日结果物化成
+        Python 列表；供历史台账逐日登记使用。
+        """
+        node, fp = self._prepare(ast)
+        trits = self._eval_root(node, fp)
+        ids = self.ident.iter_parent_ids()
+        for p in range(self.n_parents):
+            tid = trits.t.get_bit(p)
+            if tid:
+                state = _TRUE
+            elif trits.u.get_bit(p):
+                state = _UNKNOWN
+            else:
+                state = _FALSE
+            entity_id = next(ids)
+            yield entity_id, state
+        for _ in ids:
+            raise AssertionError("父身份流长度超过 n_parents")
 
     # ------------------------------------------------------------------
     # 求值骨架

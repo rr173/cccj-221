@@ -23,3 +23,7 @@ class QueryError(BitgroupError):
 
 class TokenError(QueryError):
     """分页令牌与当前索引代号或查询 AST 不匹配。"""
+
+
+class LedgerError(BitgroupError):
+    """历史状态台账：配置不一致、日期非法、事务/一致性错误。"""

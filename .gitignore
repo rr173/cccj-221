@@ -3,6 +3,11 @@ scale_run/
 scale_*/
 xc/
 xc_*/
+ledger_run/
+contrast_run/
+*.db
+*.db-wal
+*.db-shm
 idx/
 idx_*/
 **/index/

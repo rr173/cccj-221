@@ -1,0 +1,2 @@
+{"parent": {"region": "text", "level": "int64"},
+ "child":  {"temp": "int64", "source": "text"}}

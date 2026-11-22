@@ -246,6 +246,20 @@ class _IdBlob:
             off += 4 + ln
             cur += 1
 
+    def iter_ids(self):
+        """按 local_id 升序流式产出全部身份字符串。
+
+        全量顺序扫描走缓冲读，避免逐键 ``pread`` + 采样回退；供台账逐日
+        提取结果时把局部编号翻译成原始 entity_id，内存占用有界。
+        """
+        with open(self.blob_path, "rb") as fh:
+            while True:
+                head = fh.read(4)
+                if len(head) < 4:
+                    return
+                (ln,) = struct.unpack("<I", head)
+                yield fh.read(ln).decode("utf-8")
+
 
 class IdBlobWriter:
     """构建期与 HashDirectory 并行写 blob（带 u32 长度前缀）。"""
@@ -480,6 +494,10 @@ class IdentityStore:
 
     def entity_id_at(self, pid: int) -> str:
         return self.parent_blob.id_at(pid)
+
+    def iter_parent_ids(self):
+        """按 pid 升序流式产出父 entity_id（与 :meth:`entity_id_at` 同序）。"""
+        return self.parent_blob.iter_ids()
 
     def cid_of(self, child_id: str) -> Optional[int]:
         if self.child_hash is None:
