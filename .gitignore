@@ -6,6 +6,8 @@ xc_*/
 ledger_run/
 contrast_run/
 compare_run/
+review_run/
+review_run_*/
 compare_scale_run/
 *.db
 *.db-wal

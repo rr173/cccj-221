@@ -23,6 +23,11 @@
     # 新旧规则历史对照：两份台账 + 闭合自然日窗口 → JSONL 变更带
     python -m bitgroup.cli ledger-compare --left old.db --right new.db \\
         --start 2026-03-01 --end 2026-03-31 --out band.jsonl
+
+    # 现场复核包：三态名额 + 整组子记录预算 → 三份文件的目录
+    python -m bitgroup.cli review-export --index ./idx --ast query.json \\
+        --seed s2026 --quota-true 2 --quota-false 1 --quota-unknown 1 \\
+        --max-children 500 --out ./review_pkg
 """
 
 from __future__ import annotations
@@ -145,6 +150,28 @@ def main(argv=None) -> int:
     p_cmp.add_argument("--scratch-dir", default=None,
                        help="磁盘暂存目录（默认系统临时目录）")
 
+    p_rev = sub.add_parser(
+        "review-export",
+        help="按三态名额与整组子记录预算导出复核包目录",
+    )
+    p_rev.add_argument("--index", required=True, help="只读索引目录")
+    p_rev.add_argument("--ast", required=True, help="规则文件（查询 AST）")
+    p_rev.add_argument("--seed", required=True,
+                       help="抽样种子（SHA-256 优先级的输入字符串）")
+    p_rev.add_argument("--quota-true", type=int, required=True,
+                       help="true 类主对象名额（非负整数）")
+    p_rev.add_argument("--quota-false", type=int, required=True,
+                       help="false 类主对象名额（非负整数）")
+    p_rev.add_argument("--quota-unknown", type=int, required=True,
+                       help="unknown 类主对象名额（非负整数）")
+    p_rev.add_argument("--max-children", type=int, required=True,
+                       help="整包允许导出的最大子记录数（非负整数）")
+    p_rev.add_argument("--out", required=True,
+                       help="输出目录（必须尚不存在；不覆盖）")
+    p_rev.add_argument("--cache-budget-mib", type=int, default=32)
+    p_rev.add_argument("--scratch-dir", default=None,
+                       help="磁盘暂存目录（默认系统临时目录）")
+
     args = parser.parse_args(argv)
     try:
         if args.cmd == "build":
@@ -161,6 +188,9 @@ def main(argv=None) -> int:
                 "meta": handle.meta,
             }, ensure_ascii=False, indent=2))
             return 0
+
+        if args.cmd == "review-export":
+            return _run_review_export(args)
 
         if args.cmd == "ledger-compare":
             return _run_compare(args)
@@ -201,6 +231,33 @@ def main(argv=None) -> int:
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)},
                          ensure_ascii=False), file=sys.stderr)
         return 2
+
+
+def _run_review_export(args) -> int:
+    """复核包导出：成品目录写 --out，观测指标写 stderr。"""
+    from .review import export_review_package
+
+    ast = _load_ast(args.ast)
+    result = export_review_package(
+        args.index,
+        ast,
+        seed=args.seed,
+        quota_true=args.quota_true,
+        quota_false=args.quota_false,
+        quota_unknown=args.quota_unknown,
+        max_children=args.max_children,
+        out_dir=args.out,
+        cache_budget_bytes=args.cache_budget_mib * 1024 * 1024,
+        scratch_dir=args.scratch_dir,
+    )
+    print(json.dumps({
+        "ok": True,
+        "out_dir": result.out_dir,
+        "manifest": result.manifest,
+    }, ensure_ascii=False, indent=2))
+    print(json.dumps({"metrics": result.metrics}, ensure_ascii=False),
+          file=sys.stderr)
+    return 0
 
 
 def _run_compare(args) -> int:

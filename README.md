@@ -37,6 +37,7 @@ bitgroup/
   reference.py  独立逐行参考解释器（不接触产品位图/提升逻辑，仅用于核对）
   ledger.py     历史状态台账（SQLite，按自然日维护连续同态区间）
   compare.py    新旧规则历史对照（只读九格对照，输出按日期压缩的变更带）
+  review.py     现场复核包导出（三态名额 + 整组子记录预算，原子发布）
   cli.py        命令行入口
 scripts/
   generate_scale.py  规模数据生成器（默认 1M 主 / 10M 子）
@@ -45,6 +46,7 @@ scripts/
   ledger_contrast.py 历史对照实验（证明更新不扫描旧历史）
   compare_demo.py    新旧规则对照小样本复跑 + 逐日逐对象独立核对
   compare_scale.py   对照规模证据（长稳定历史 + 零散不可比日）
+  review_demo.py     复核包小样本独立核对 + 偏斜大组导出面观测
 fixtures/            手算示例小夹具（ledger/ 为历史台账逐日夹具）
 tests/               unittest 套件（含与参考解释器的全量交叉核对）
 ```
@@ -212,6 +214,71 @@ PYTHONPATH=. python3 scripts/compare_scale.py --work-dir ./compare_scale_run
 ```
 
 生成的数据不入库（两个目录均已被 .gitignore 覆盖，脚本默认结束后删除）。
+
+## 现场复核包导出（三态名额 + 整组子记录预算）
+
+现场抽检只有有限的明细处理额度。审核员要从一个已建索引里按规则挑一批
+主对象，并把**中选对象的全部子记录**带走离线复核。`review-export` 取代
+“按对象数翻页再截断”的做法：
+
+- 按现有三态语义给每个主对象归类（名额为零的类照常判定，不因名额为零
+  改变判定）；
+- 优先级只由 `SHA-256(UTF-8(seed) + 0x00 + UTF-8(entity_id))` 的摘要字节
+  升序决定，摘要相同再比 `entity_id` 的 UTF-8 字节——与导入行序、索引
+  局部编号、子表顺序都无关；
+- 按该顺序考察：**所在类还有名额**且**全部子记录都装得进剩余额度**才
+  中选；中选消耗一个本类名额与相应子记录额度，未中选不消耗、也不阻止
+  后面的对象中选。无子记录的对象成本为零，额度用完后仍可入选；不在
+  类间挪名额，不要求填满，也不求装入数量最多的组合。
+
+```bash
+python -m bitgroup.cli review-export --index ./idx_demo --ast fixtures/q_exists.json \
+  --seed s2026 --quota-true 2 --quota-false 1 --quota-unknown 1 \
+  --max-children 500 --out ./review_pkg
+# 成品目录写 --out；可观察指标（含导出阶段读取计数）写标准错误
+```
+
+### 交付物（一个目录，三份文件）
+
+- `parents.jsonl`：按中选优先级逐行，`entity_id`、判定 `state`、以及保留
+  索引表声明中全部属性的 `attributes`（业务值，不是列字典编号或位图位号）。
+- `children.jsonl`：按相同主对象顺序分组，组内按 `child_id` 的 UTF-8 字节
+  升序；每行 `entity_id`、`child_id` 与子表 `attributes`。中选对象的所有
+  子记录各导出一次，**包括不满足规则的子记录**；落选对象不出现在任一文件。
+- `manifest.json`：索引代号、规范化规则指纹、`seed`、名额、子记录上限、
+  三态各自的候选数与中选数，以及实际导出的子记录总数。
+
+空包同样产出三份文件（两份 JSONL 为空）。`null`、空字符串、布尔与整数
+按业务值原样恢复，互不混淆。
+
+### 发布与失败
+
+单个输出路径只考虑一个发布者：目标路径已存在（文件、目录或符号链接）
+一律拒绝，不覆盖。导出先写到目标同级的隐藏暂存目录，三份文件写完并
+`fsync` 后才 `rename` 成最终目录；任一步失败都会清理暂存，最终目录不会
+留下可被当成成品的半包。
+
+### 处理量与复跑
+
+- 考察阶段按优先级流式归并：每个主对象的优先级键、判定与组大小先写磁盘
+  暂存，再按 `(digest, entity_id)` 顺序读取——不把全体候选、中选名单或
+  一个大子组整体装进 Python 内存。
+- 规则求值本身要读取 posting/子行（这是判定成本）；**导出阶段**只恢复
+  中选对象及其子组属性。单组内 `child_id` 排序超过块上限时走分块排序 +
+  多路归并。
+- 指标（stderr）：`phases.consider` / `phases.export` 的页读取与
+  `child_rows_processed`、`export_child_ids_read`、`export_child_attr_reads`、
+  `export_largest_group`、`export_group_sort_runs`、`export_peak_kib` 等。
+
+```bash
+# 小样本独立核对（纯 Python 从原始行算三态/优先级/整组成本，再比对输出）：
+# 装不下的大组被跳过、后续补位、零额度选无子对象、行序变化逐字节不变、
+# 规则变化改占名额、发布前失败不留半包。
+# 另：现场生成偏斜大组，验证落选大组不在导出阶段被展开。
+PYTHONPATH=. python3 scripts/review_demo.py --work-dir ./review_run --big 200000
+```
+
+生成的数据与索引按 `.gitignore` 排除，不提交（`review_run/` 已忽略）。
 
 ## 规模化（128 MiB 约束，数据与索引不入库）
 

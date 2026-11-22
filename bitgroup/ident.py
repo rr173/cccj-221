@@ -260,6 +260,46 @@ class _IdBlob:
                 (ln,) = struct.unpack("<I", head)
                 yield fh.read(ln).decode("utf-8")
 
+    def iter_range(self, first_local: int, last_local: int):
+        """按 local_id 升序流式产出 ``[first_local, last_local)`` 的身份。
+
+        先二分到最近采样点，再用独立缓冲句柄顺序读取；不逐键 ``pread``，
+        也不把整段身份装进内存。只读取调用者指定的局部编号区间。
+        """
+        if first_local >= last_local:
+            return
+        self.open()
+        assert self._fh is not None
+        if not self._index:
+            raise InputDataError("身份 blob 缺少采样索引")
+        lo, hi = 0, len(self._index) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self._index[mid][0] <= first_local:
+                lo = mid
+            else:
+                hi = mid - 1
+        cur, off = self._index[lo]
+        with open(self.blob_path, "rb") as fh:
+            fh.seek(off)
+            while cur < first_local:
+                head = fh.read(4)
+                if len(head) < 4:
+                    raise InputDataError("身份 blob 截断")
+                (ln,) = struct.unpack("<I", head)
+                fh.seek(ln, 1)
+                cur += 1
+            while cur < last_local:
+                head = fh.read(4)
+                if len(head) < 4:
+                    raise InputDataError("身份 blob 截断")
+                (ln,) = struct.unpack("<I", head)
+                data = fh.read(ln)
+                if len(data) != ln:
+                    raise InputDataError("身份 blob 截断")
+                yield data.decode("utf-8")
+                cur += 1
+
 
 class IdBlobWriter:
     """构建期与 HashDirectory 并行写 blob（带 u32 长度前缀）。"""
@@ -498,6 +538,14 @@ class IdentityStore:
     def iter_parent_ids(self):
         """按 pid 升序流式产出父 entity_id（与 :meth:`entity_id_at` 同序）。"""
         return self.parent_blob.iter_ids()
+
+    def iter_child_ids(self, first_cid: int, last_cid: int):
+        """按 cid 升序流式产出 ``[first_cid, last_cid)`` 的子身份。
+
+        只读取该子组所在区间；调用者据此在导出阶段按组取身份，而不是
+        先恢复整张子表。
+        """
+        return self.child_blob.iter_range(first_cid, last_cid)
 
     def cid_of(self, child_id: str) -> Optional[int]:
         if self.child_hash is None:

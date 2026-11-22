@@ -27,3 +27,7 @@ class TokenError(QueryError):
 
 class LedgerError(BitgroupError):
     """历史状态台账：配置不一致、日期非法、事务/一致性错误。"""
+
+
+class ReviewError(BitgroupError):
+    """复核包导出：参数非法、输出路径已存在、发布失败或索引不一致。"""
